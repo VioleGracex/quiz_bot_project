@@ -1,0 +1,33 @@
+{
+    "quizzes": {
+      "generalknowledge": [
+        {
+          "question": "What is the capital of Germany?",
+          "options": ["Berlin", "Madrid", "Paris", "Rome"],
+          "answer": 0
+        }
+      ],
+      "science": [
+        {
+          "question": "What planet is closest to the sun?",
+          "options": ["Earth", "Mars", "Mercury", "Venus"],
+          "answer": 2
+        }
+      ],
+      "history": [
+        {
+          "question": "Who was the first President of the United States?",
+          "options": ["Abraham Lincoln", "Thomas Jefferson", "George Washington", "John Adams"],
+          "answer": 2
+        }
+      ],
+      "sports": [
+        {
+          "question": "How many players are there on a soccer team?",
+          "options": ["9", "10", "11", "12"],
+          "answer": 2
+        }
+      ]
+    }
+  }
+  
