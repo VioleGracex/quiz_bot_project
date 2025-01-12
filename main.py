@@ -2,7 +2,7 @@ import logging
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler
 from handlers.start_handler import start, handle_user_input
 from handlers.menu_handler import show_quiz_menu
-from handlers.quiz_handler import start_quiz, end_quiz
+from handlers.quiz_handler import handle_quiz_selection , end_quiz
 
 # Set up logging to see what's happening
 logging.basicConfig(level=logging.INFO)
@@ -16,7 +16,7 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_user_input))
     application.add_handler(CommandHandler("menu", show_quiz_menu))
-    application.add_handler(CallbackQueryHandler(start_quiz, pattern="quiz"))
+    application.add_handler(CallbackQueryHandler(handle_quiz_selection))
     application.add_handler(CallbackQueryHandler(end_quiz, pattern="^end$"))
 
     # Start polling
