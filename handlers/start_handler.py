@@ -2,6 +2,9 @@ from email.mime import application
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 
+from handlers.quiz_session_handler import quiz_start
+
+
 # Privacy agreement link (can be replaced with actual URL)
 PRIVACY_AGREEMENT_LINK = "https://example.com/privacy"
 
@@ -80,6 +83,7 @@ async def collect_user_info(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         del context.user_data['job']
         del context.user_data['phone_number']
         del context.user_data['email']
+        quiz_start(update, context)
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
