@@ -8,6 +8,7 @@ class QuizSession:
         self.end_time = None
         self.score = 0
         self.duration = None
+        self.current_question_index = 0
 
     def end_session(self):
         self.end_time = datetime.now()

@@ -5,6 +5,16 @@
           "question": "What is the capital of Germany?",
           "options": ["Berlin", "Madrid", "Paris", "Rome"],
           "answer": 0
+        },
+        {
+          "question": "What is the largest ocean on Earth?",
+          "options": ["Atlantic Ocean", "Indian Ocean", "Arctic Ocean", "Pacific Ocean"],
+          "answer": 3
+        },
+        {
+          "question": "What year did World War II end?",
+          "options": ["1945", "1939", "1918", "1963"],
+          "answer": 0
         }
       ],
       "science": [
@@ -19,13 +29,11 @@
           "question": "Who was the first President of the United States?",
           "options": ["Abraham Lincoln", "Thomas Jefferson", "George Washington", "John Adams"],
           "answer": 2
-        }
-      ],
-      "sports": [
+        },
         {
-          "question": "How many players are there on a soccer team?",
-          "options": ["9", "10", "11", "12"],
-          "answer": 2
+          "question": "Which ancient civilization built the pyramids?",
+          "options": ["Roman", "Egyptian", "Mayan", "Greek"],
+          "answer": 1
         }
       ]
     }

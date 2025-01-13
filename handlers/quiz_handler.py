@@ -1,74 +1,127 @@
 import json
-from telegram import Update
+import logging
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import CallbackContext
 from datetime import datetime
+from handlers.menu_handler import show_quiz_menu
+from models.quiz_model import QuizSession
 from utils.db_utils import create_quiz_session
 from utils.time_utils import calculate_duration
 
+# Configure logging
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+
 async def handle_quiz_selection(update: Update, context: CallbackContext):
     query = update.callback_query
-    await query.answer()  # Acknowledge the callback
-    
-    callback_data = query.data  # The data sent by the inline button
-    chat_id = update.effective_chat.id  # Chat ID of the user
+    await query.answer()
+    callback_data = query.data
+    chat_id = update.effective_chat.id
 
-    # If a quiz is selected, store the quiz name in the context
+    logging.info(f"Quiz selection received: {callback_data} from chat_id: {chat_id}")
+    print(f"Quiz selection received: {callback_data}")
+
     if callback_data.startswith("quiz_"):
-        quiz_name = callback_data.split('_', 1)[1]  # Extract quiz name
+        quiz_name = callback_data.split('_', 1)[1]
+        logging.info(f"Selected quiz: {quiz_name}")
         
-        # Store the selected quiz name in context.user_data
-        context.user_data["selected_quiz"] = quiz_name
-        
-        # Display the chosen quiz to the user
+        quiz_session = QuizSession(user_id=chat_id, quiz_name=quiz_name)
+        context.user_data["quiz_session"] = quiz_session
+
         await query.message.reply_text(f"You chose the {quiz_name} quiz.")
-    
-    # If "end" is selected, end the quiz session and clear context data
+        await ask_question(update, context, 0)
     elif callback_data == "end":
-        # Check if a quiz session exists and clear it
-        if "selected_quiz" in context.user_data:
-            del context.user_data["selected_quiz"]
+        if "quiz_session" in context.user_data:
+            del context.user_data["quiz_session"]
             await query.message.reply_text("The quiz has been ended. Thank you for participating!")
         else:
             await query.message.reply_text("No quiz session was started.")
 
-async def end_quiz(update: Update, context: CallbackContext):
-    session = context.user_data.get("quiz_session", None)
-    
-    if session is None:
-        await update.message.reply_text("Quiz session not found. Please start the quiz first.")
-        return
-
-    session["end_time"] = datetime.now()
-    session["duration"] = calculate_duration(session["start_time"], session["end_time"])
-    await update.message.reply_text(f"Quiz completed in {int(session['duration'])} seconds!")
-
 async def ask_question(update: Update, context: CallbackContext, question_index: int):
-    # Ensure quiz session exists
-    quiz_session = context.user_data.get("quiz_session", None)
-    
+    quiz_session = context.user_data.get("quiz_session")
+
     if not quiz_session:
-        await update.message.reply_text("No quiz session found. Please start a quiz first.")
+        await update.callback_query.message.reply_text("No quiz session found. Please start a quiz first.")
         return
 
-    quiz_name = quiz_session.get("quiz_name", None)
-    if not quiz_name:
-        await update.message.reply_text("Quiz name is missing. Please start the quiz again.")
-        return
-    
-    # Load question from JSON file
+    quiz_name = quiz_session.quiz_name
+    logging.debug(f"Asking question {question_index} for quiz: {quiz_name}")
+
     try:
         with open("data/questions.json", "r") as file:
             questions = json.load(file)["quizzes"].get(quiz_name, [])
-        
-        if not questions:
-            await update.message.reply_text(f"No questions found for quiz: {quiz_name}.")
+
+        if question_index >= len(questions):
+            await end_quiz(update, context)
             return
-        
+
         question = questions[question_index]
-        options = "\n".join([f"{i + 1}. {opt}" for i, opt in enumerate(question["options"])])
-        await update.message.reply_text(f"Question: {question['question']}\n{options}")
-    
-    except FileNotFoundError:
-        await update.message.reply_text("Error: Question file not found. Please try again later.")
-    except json.JSONDecodeError:
-        await update.message.reply_text("Error: There was an issue reading the question file. Please try again later.")
+        options = question.get("options", [])
+        keyboard = [[InlineKeyboardButton(opt, callback_data=f"answer_{i}")] for i, opt in enumerate(options)]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        logging.info(f"Question: {question['question']} with options: {options}")
+        await update.callback_query.message.reply_text(f"Question: {question['question']}", reply_markup=reply_markup)
+    except Exception as e:
+        logging.error(f"Error in ask_question: {e}")
+        await update.callback_query.message.reply_text(f"An error occurred: {e}")
+
+async def handle_answer(update: Update, context: CallbackContext):
+    query = update.callback_query
+    await query.answer()
+
+    quiz_session = context.user_data.get("quiz_session")
+    if not quiz_session:
+        await query.message.reply_text("No quiz session found. Please start a quiz.")
+        return
+
+    logging.info(f"Handling answer for question index: {quiz_session.current_question_index}")
+    print(f"User answered: {query.data}")
+
+    try:
+        with open("data/questions.json", "r") as file:
+            questions = json.load(file)["quizzes"].get(quiz_session.quiz_name, [])
+
+        if quiz_session.current_question_index < len(questions):
+            correct_answer_index = questions[quiz_session.current_question_index].get("answer", -1)
+            user_answer_index = int(query.data.split('_')[1])
+
+            if user_answer_index == correct_answer_index:
+                quiz_session.score += 1
+                logging.info("User answered correctly.")
+                await update.message.reply_text("Correct!")
+            else:
+                correct_option = questions[quiz_session.current_question_index]['options'][correct_answer_index]
+                logging.info("User answered incorrectly.")
+                await query.message.reply_text(f"Incorrect. The correct answer was: {correct_option}")
+
+            quiz_session.current_question_index += 1
+            if quiz_session.current_question_index < len(questions):
+                await ask_question(update, context, quiz_session.current_question_index)
+            else:
+                await show_score_and_menu(update, context)
+    except Exception as e:
+        logging.error(f"Error in handle_answer: {e}")
+        await query.message.reply_text(f"An error occurred: {e}")
+
+async def show_score_and_menu(update: Update, context: CallbackContext):
+    quiz_session = context.user_data.get("quiz_session")
+    if quiz_session:
+        score_message = f"Quiz finished! Your score: {quiz_session.score} / {quiz_session.current_question_index}"
+        logging.info(score_message)
+        await update.callback_query.message.reply_text(score_message)
+        context.user_data.pop("quiz_session", None)
+    await show_quiz_menu(update, context)
+
+async def end_quiz(update: Update, context: CallbackContext):
+    quiz_session = context.user_data.get("quiz_session")
+    if not quiz_session:
+        await update.callback_query.message.reply_text("Quiz session not found.")
+        return
+
+    score = quiz_session.score
+    total_questions = quiz_session.current_question_index
+    logging.info(f"Ending quiz. Score: {score}/{total_questions}")
+
+    await update.callback_query.message.reply_text(f"Quiz completed! Your score is {score} out of {total_questions}.")
+    del context.user_data["quiz_session"]
+    await update.callback_query.message.reply_text("Returning to the quiz menu.")
