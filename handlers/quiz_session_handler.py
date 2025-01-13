@@ -86,6 +86,33 @@ def load_quiz_data():
         logging.error(f"Error loading quiz data: {e}")
         raise Exception("Answers were not loaded correctly. Please contact support.")  # Raise an exception for the error
 
+
+
+def get_quiz_category(category_index=None):
+    try:
+        with open('data/quiz_data.json', 'r') as file:
+            quiz_data = json.load(file)
+        
+        # Check if the necessary structure exists in the loaded JSON
+        if not isinstance(quiz_data, dict):
+            raise ValueError("Quiz data should be a dictionary.")
+        
+        if "categories" not in quiz_data:
+            raise KeyError("'categories' key is missing in the quiz data.")
+        
+        # If category_index is provided, return the category by index
+        if category_index is not None:
+            if category_index < 0 or category_index >= len(quiz_data["categories"]):
+                raise IndexError(f"Category index {category_index} out of range.")
+            return quiz_data["categories"][category_index]
+        
+        # If no category index is provided, return the full categories list
+        return quiz_data["categories"]
+    
+    except (json.JSONDecodeError, ValueError, KeyError, IndexError) as e:
+        print(f"Error loading quiz data: {e}")
+        return 'None'
+
 # Initialize the quiz session handler
 async def quiz_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show the main quiz menu with options to start a quiz or end the session."""
@@ -205,7 +232,7 @@ async def ask_question(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         logging.info(f"Question: {question['question']} with options: {options}")
         await update.callback_query.message.reply_text(f"Question {current_index + 1}: {question['question']}", reply_markup=reply_markup)
-
+        context.user_data['start_time'] = datetime.now().isoformat()
     except Exception as e:
         await update.callback_query.message.reply_text("There was an issue loading the question. Please contact support.")
         logging.error(f"Error in ask_question: {e}")
@@ -254,8 +281,6 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     except Exception as e:
         await update.callback_query.message.reply_text("There was an issue handling your answer. Please contact support.")
         logging.error(f"Error in handle_answer: {e}")
-
-
 async def handle_end_game_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles the end game action based on user choice."""
     try:
@@ -263,17 +288,25 @@ async def handle_end_game_action(update: Update, context: ContextTypes.DEFAULT_T
         await query.answer()
 
         chat_id = update.effective_chat.id
-        quiz_name = context.user_data.get('quiz_name', 'Unknown Quiz')
-        category_name = context.user_data.get('category_name', 'General')
+        quiz_name = context.user_data.get('quiz_name', context.user_data.get('category_index'))
         start_time = context.user_data.get('start_time')
         end_time = datetime.now().isoformat()
         score = context.user_data.get('score', 0)
-        duration = context.user_data.get('duration', 0)
+        duration = (datetime.fromisoformat(end_time) - datetime.fromisoformat(start_time)).total_seconds() / 60
         current_question_index = context.user_data.get('current_question_index', 0)
 
+        # Debug log for session data
+        logging.debug(f"Handling end game for chat_id: {chat_id}, quiz_name: {quiz_name}, score: {score}, duration: {duration}, current_question_index: {current_question_index}")
+        logging.debug(f"Session data: start_time={start_time}, end_time={end_time}, score={score}, duration={duration}, current_question_index={current_question_index}")
+
         if query.data == "play_again":
+            # Save session data before starting a new one
+            logging.debug("Saving session before play again.")
+            save_session(chat_id, quiz_name, start_time, end_time, score, duration, current_question_index)  # No await needed
+            context.user_data.clear()  # Clear previous session data
+
             # Get the last category played and restart the quiz
-            category_index = context.user_data.get('category_index')
+            category_index = get_quiz_category(context.user_data.get('category_index'))
             if category_index is not None:
                 quiz_data = load_quiz_data()
                 category = quiz_data["categories"][category_index]
@@ -281,12 +314,18 @@ async def handle_end_game_action(update: Update, context: ContextTypes.DEFAULT_T
                 # Reset score and question index, and start the quiz again
                 context.user_data['current_question_index'] = 0
                 context.user_data['score'] = 0
+                context.user_data['quiz_in_progress'] = True  # Set new quiz flag
                 await query.edit_message_text(f"Starting quiz again in the '{category['name']}' category. Good luck!")
                 await ask_question(update, context)
             else:
                 await query.edit_message_text("No category found. Please choose a category to start the quiz.")
 
         elif query.data == "choose_another_quiz":
+            # Save session data before starting a new quiz selection
+            logging.debug("Saving session before choosing another quiz.")
+            save_session(chat_id, quiz_name, start_time, end_time, score, duration, current_question_index)  # No await needed
+            context.user_data.clear()  # Clear previous session data
+
             # Show categories to choose a new quiz
             quiz_data = load_quiz_data()
             keyboard = [
@@ -295,17 +334,19 @@ async def handle_end_game_action(update: Update, context: ContextTypes.DEFAULT_T
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text("Please choose a new quiz category:", reply_markup=reply_markup)
-            context.user_data['quiz_in_progress'] = True
+            context.user_data['quiz_in_progress'] = True  # Set new quiz flag
 
         elif query.data == "end_session":
-            # End the quiz session, save session data, and clear user data
+            # Save session data before ending the session
+            logging.debug("Saving session before ending the session.")
+            save_session(chat_id, quiz_name, start_time, end_time, score, duration, current_question_index)  # No await needed
+            context.user_data.clear()  # Clear all session data
             await query.edit_message_text("Thanks for playing! We hope you enjoyed the quiz.")
-            save_session(chat_id, quiz_name, category_name, start_time, end_time, score, duration, current_question_index)
-            context.user_data.clear()
 
     except Exception as e:
         await query.edit_message_text("There was an issue handling the end game action. Please contact support.")
         logging.error(f"Error in handle_end_game_action: {e}")
+        logging.debug(f"Exception details: {e}")
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Cancel the registration and clear user data."""
