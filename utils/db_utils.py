@@ -53,6 +53,19 @@ def get_user_by_chat_id(chat_id: int):
         return User(*result)
     return None
 
+def is_user_in_db(chat_id: int) -> bool:
+    """Checks if a user is already in the database."""
+    connection = sqlite3.connect(DB_USERS_PATH)
+    cursor = connection.cursor()
+    cursor.execute("SELECT 1 FROM users WHERE chat_id = ?", (chat_id,))
+    result = cursor.fetchone()
+    connection.close()
+    
+    print(f"Checking if user {chat_id} exists: {result is not None}")  # Log the result of the query
+    
+    return result is not None  # Returns True if user exists, otherwise False
+
+
 def delete_user_from_db(chat_id: int):
     connection = sqlite3.connect(DB_USERS_PATH)
     cursor = connection.cursor()

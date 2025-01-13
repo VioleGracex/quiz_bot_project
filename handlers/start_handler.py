@@ -2,15 +2,27 @@ from email.mime import application
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 
-from handlers.quiz_session_handler import quiz_start
+from handlers.quiz_session_handler import show_start_game_keyboard
+from models.user_model import User
+from utils.db_utils import add_user_to_db, is_user_in_db
 
 
 # Privacy agreement link (can be replaced with actual URL)
 PRIVACY_AGREEMENT_LINK = "https://example.com/privacy"
 
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Ask the user for privacy agreement."""
+    """Ask the user for privacy agreement or welcome back if they are in the database."""
+    chat_id = update.message.chat.id  # Use chat_id instead of user_id
+    print(f"Start function: Checking if user {chat_id} exists in the database.")
+    
+    # Check if the user exists in the database
+    if is_user_in_db(chat_id):
+        # If the user exists, welcome back and show the start game keyboard
+        await update.message.reply_text("Welcome back! Let's start the game!")
+        await show_start_game_keyboard(update, context)
+        return  # Exit the function early to skip the privacy agreement process
+    
+    # If the user does not exist, ask for the privacy agreement
     keyboard = [
         [
             InlineKeyboardButton("Yes, I agree", callback_data="accept"),
@@ -25,7 +37,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         reply_markup=reply_markup,
     )
     context.user_data['awaiting_privacy_confirmation'] = True  # Indicate that we are waiting for the privacy agreement
-
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles the privacy agreement response or session termination."""
@@ -78,12 +89,29 @@ async def collect_user_info(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         context.user_data['email'] = user_info
         # Finalize registration
         await update.message.reply_text(f"Thank you for providing all information. Registration complete!")
+
+        # Create a User object to store in the database
+        user = User(
+            chat_id=update.message.chat.id,  # Use the chat_id as unique identifier
+            name=context.user_data['name'],
+            job=context.user_data['job'],
+            phone_number=context.user_data['phone_number'],
+            email=context.user_data['email'],
+            privacy_accepted=1  # Set privacy accepted to 1
+        )
+
+        # Save the user data to the database
+        add_user_to_db(user)
+
+        # Clean up user data from context
         del context.user_data['awaiting_email']
         del context.user_data['name']
         del context.user_data['job']
         del context.user_data['phone_number']
         del context.user_data['email']
-        quiz_start(update, context)
+
+        # Show the start game keyboard
+        await show_start_game_keyboard(update, context)
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -99,4 +127,4 @@ def setup_start_handlers(application: application) -> None:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button, pattern="^(accept|decline|end_session)$"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, collect_user_info))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, cancel))  # Remove 'pattern' argument
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, cancel))  

@@ -3,6 +3,42 @@ import logging
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
+
+# keyboards 
+
+async def show_start_game_keyboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show the start game options to play a quiz or end the session."""
+    try:
+        keyboard = [
+            [
+                InlineKeyboardButton("Play a Quiz", callback_data="play_quiz"),
+                InlineKeyboardButton("End Session", callback_data="end_session"),
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text("Welcome to the quiz! Choose an option:", reply_markup=reply_markup)
+
+    except Exception as e:
+        await update.message.reply_text("There was an issue showing the start game options. Please contact support.")
+        logging.error(f"Error in show_start_game_keyboard: {e}")
+
+async def show_end_game_keyboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show the end game options to play again or choose another quiz."""
+    try:
+        keyboard = [
+            [
+                InlineKeyboardButton("Play Again", callback_data="play_again"),  # Change from play_quiz to play_again
+                InlineKeyboardButton("Choose Another Quiz", callback_data="choose_another_quiz"),
+                InlineKeyboardButton("End Session", callback_data="end_session"),
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.callback_query.message.reply_text("Game Over! What would you like to do next?", reply_markup=reply_markup)
+
+    except Exception as e:
+        await update.callback_query.message.reply_text("There was an issue showing the end game options. Please contact support.")
+        logging.error(f"Error in show_end_game_keyboard: {e}")
+
 # Load categories and questions from JSON file with error checking
 def load_quiz_data():
     try:
@@ -37,15 +73,10 @@ def load_quiz_data():
 async def quiz_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show the main quiz menu with options to start a quiz or end the session."""
     try:
-        keyboard = [
-            [
-                InlineKeyboardButton("Play a Quiz", callback_data="play_quiz"),
-                InlineKeyboardButton("End Session", callback_data="end_session"),
-            ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text("Welcome to the quiz! Choose an option:", reply_markup=reply_markup)
+        # Show the start game options
+        await show_start_game_keyboard(update, context)
 
+        # Initialize user data for the quiz session
         context.user_data['quiz_in_progress'] = False
         context.user_data['score'] = 0
         context.user_data['current_question_index'] = 0
@@ -82,17 +113,34 @@ async def quiz_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             quiz_data = load_quiz_data()
             category = quiz_data["categories"][category_index]
             
-            # Start the quiz with the first question
+            # Save the category index in user data
             context.user_data['category_index'] = category_index
             context.user_data['current_question_index'] = 0
             context.user_data['score'] = 0
             
+            # Start the quiz with the first question
             await query.edit_message_text(f"Starting quiz in the '{category['name']}' category. Good luck!")
             await ask_question(update, context)
+
+        elif query.data == "play_again":
+            # Get the last category played from user data and restart the quiz
+            category_index = context.user_data.get('category_index')
+            if category_index is not None:
+                quiz_data = load_quiz_data()
+                category = quiz_data["categories"][category_index]
+                
+                # Reset score and question index, and start the quiz again
+                context.user_data['current_question_index'] = 0
+                context.user_data['score'] = 0
+                await query.edit_message_text(f"Starting quiz again in the '{category['name']}' category. Good luck!")
+                await ask_question(update, context)
+            else:
+                await query.edit_message_text("No category found. Please choose a category to start the quiz.")
 
     except Exception as e:
         await query.edit_message_text("There was an issue during the quiz. Please contact support.")
         logging.error(f"Error in quiz_button: {e}")
+
 
 async def ask_question(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Ask the current question and handle the user's response."""
@@ -165,33 +213,28 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.callback_query.message.reply_text("There was an issue handling your answer. Please contact support.")
         logging.error(f"Error in handle_answer: {e}")
 
-async def show_end_game_keyboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show the end game options to play again or choose another quiz."""
-    try:
-        keyboard = [
-            [
-                InlineKeyboardButton("Play Again", callback_data="play_quiz"),
-                InlineKeyboardButton("Choose Another Quiz", callback_data="choose_another_quiz"),
-                InlineKeyboardButton("End Session", callback_data="end_session"),
-            ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.callback_query.message.reply_text("Game Over! What would you like to do next?", reply_markup=reply_markup)
 
-    except Exception as e:
-        await update.callback_query.message.reply_text("There was an issue showing the end game options. Please contact support.")
-        logging.error(f"Error in show_end_game_keyboard: {e}")
-
+# Update handle_end_game_action to restart from the last category played
 async def handle_end_game_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles the end game action based on user choice."""
     try:
         query = update.callback_query
         await query.answer()
 
-        if query.data == "play_quiz":
-            # Start a new quiz
-            await query.edit_message_text("Please choose a category to start the quiz:")
-            context.user_data['quiz_in_progress'] = False
+        if query.data == "play_again":
+            # Get the last category played and restart the quiz
+            category_index = context.user_data.get('category_index', None)
+            if category_index is None:
+                await query.edit_message_text("No category was selected. Please choose a quiz to play.")
+                return
+            
+            # Reset the question index and score
+            context.user_data['current_question_index'] = 0
+            context.user_data['score'] = 0
+            quiz_data = load_quiz_data()
+            category = quiz_data["categories"][category_index]
+            await query.edit_message_text(f"Starting quiz again in the '{category['name']}' category. Good luck!")
+            await ask_question(update, context)  # Start the quiz from the first question of the same category
 
         elif query.data == "choose_another_quiz":
             # Show categories again to start a new quiz
@@ -212,7 +255,6 @@ async def handle_end_game_action(update: Update, context: ContextTypes.DEFAULT_T
     except Exception as e:
         await update.callback_query.message.reply_text("There was an issue processing your request. Please contact support.")
         logging.error(f"Error in handle_end_game_action: {e}")
-
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Cancel the registration and clear user data."""
     if update.message.text.strip().lower() == "cancel":
@@ -223,7 +265,7 @@ def setup_session_handlers(application: Application) -> None:
     """Sets up all the handlers for the quiz bot."""
     # Handlers
     application.add_handler(CommandHandler("quiz_start", quiz_start))
-    application.add_handler(CallbackQueryHandler(quiz_button, pattern="^(play_quiz|end_session|choose_category_\\d+)$"))
+    application.add_handler(CallbackQueryHandler(quiz_button, pattern="^(play_quiz|end_session|choose_category_\\d+|play_again)$"))
     application.add_handler(CallbackQueryHandler(handle_answer, pattern="^answer_\\d+$"))
     application.add_handler(CallbackQueryHandler(handle_end_game_action, pattern="^(play_quiz|choose_another_quiz|end_session)$"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, cancel))
