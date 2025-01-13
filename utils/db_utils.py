@@ -160,3 +160,36 @@ def get_highest_score(chat_id):
     
     conn.close()
     return highest_score
+
+# Get the current question index for a specific chat_id
+def get_current_question_index(chat_id):
+    conn = sqlite3.connect(DB_SESSIONS_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT current_question_index FROM quiz_sessions WHERE chat_id = ?", (chat_id,))
+    current_question_index = cursor.fetchone()
+    current_question_index = current_question_index[0] if current_question_index else 0
+    
+    conn.close()
+    return current_question_index
+
+# Save the quiz session to the database
+def save_session(chat_id, quiz_name, category_name, start_time, end_time, score, duration, current_question_index):
+    conn = sqlite3.connect(DB_SESSIONS_PATH)
+    cursor = conn.cursor()
+    
+    # Fetch the current highest score for the specific category
+    cursor.execute("SELECT highest_score FROM quiz_sessions WHERE chat_id = ? AND category_name = ?", (chat_id, category_name))
+    current_highest_score = cursor.fetchone()
+    current_highest_score = current_highest_score[0] if current_highest_score else 0
+    
+    # Update the highest score if the new score is greater
+    new_highest_score = max(current_highest_score, score)
+    
+    cursor.execute("""
+    INSERT OR REPLACE INTO quiz_sessions (chat_id, quiz_name, category_name, start_time, end_time, score, duration, current_question_index, highest_score)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (chat_id, quiz_name, category_name, start_time, end_time, score, duration, current_question_index, new_highest_score))
+    
+    conn.commit()
+    conn.close()
