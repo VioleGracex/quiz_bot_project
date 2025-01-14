@@ -1,14 +1,16 @@
 from datetime import datetime
 import json
 import logging
+import random
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
 from utils.db_utils import save_session
 
+# Initialize a global variable to store quiz data
+quiz_data = None
 
 # keyboards 
-
 async def show_start_game_keyboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show the start game options to play a quiz or end the session."""
     try:
@@ -37,7 +39,6 @@ async def show_start_game_keyboard(update: Update, context: ContextTypes.DEFAULT
         await update.message.reply_text("There was an issue showing the start game options. Please contact support.")
         logging.error(f"Error in show_start_game_keyboard: {e}")
 
-
 async def show_end_game_keyboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show the end game options to play again or choose another quiz."""
     try:
@@ -55,38 +56,52 @@ async def show_end_game_keyboard(update: Update, context: ContextTypes.DEFAULT_T
         await update.callback_query.message.reply_text("There was an issue showing the end game options. Please contact support.")
         logging.error(f"Error in show_end_game_keyboard: {e}")
 
-
-# Load categories and questions from JSON file with error checking
 def load_quiz_data():
+    global quiz_data
+    if quiz_data is not None:
+        # Return cached quiz data if already loaded
+        return quiz_data
+    
     try:
         with open('data/quiz_data.json', 'r') as file:
-            quiz_data = json.load(file)
+            loaded_data = json.load(file)
         
-        # Check if the necessary structure exists in the loaded JSON
-        if not isinstance(quiz_data, dict):
+        # Validate JSON structure
+        if not isinstance(loaded_data, dict):
             raise ValueError("Quiz data should be a dictionary.")
-        
-        if "categories" not in quiz_data:
+        if "categories" not in loaded_data:
             raise KeyError("'categories' key is missing in the quiz data.")
         
-        # Validate each category
-        for category in quiz_data["categories"]:
+        # Validate categories and questions
+        for category in loaded_data["categories"]:
             if "name" not in category or "questions" not in category:
                 raise KeyError(f"Missing 'name' or 'questions' in category {category}.")
-            # Validate each question in the category
             for question in category["questions"]:
                 if "question" not in question or "correct_answer_index" not in question:
                     raise KeyError(f"Missing 'question' or 'correct_answer_index' in question {question}.")
                 if "options" not in question:
                     raise KeyError(f"Missing 'options' in question {question}.")
         
+        # Store the validated data in a global variable
+        quiz_data = loaded_data
         return quiz_data
+
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        print(f"Error loading quiz data: {e}")
+        return {}
 
     except (json.JSONDecodeError, ValueError, KeyError) as e:
         logging.error(f"Error loading quiz data: {e}")
         raise Exception("Answers were not loaded correctly. Please contact support.")  # Raise an exception for the error
 
-
+def load_global_quiz_data():
+    global quiz_data
+    if quiz_data is None:
+        quiz_data = load_quiz_data()
+        # Shuffle categories and questions globally
+        random.shuffle(quiz_data['categories'])
+        for category in quiz_data['categories']:
+            random.shuffle(category['questions'])
 
 def get_quiz_category(category_index=None):
     try:
@@ -200,6 +215,7 @@ async def quiz_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 category = quiz_data["categories"][category_index]
                 
                 # Reset score and question index, and start the quiz again
+                del context.user_data['shuffled_questions']
                 context.user_data['current_question_index'] = 0
                 context.user_data['score'] = 0
                 await query.edit_message_text(f"Starting quiz again in the '{category['name']}' category. Good luck!")
@@ -212,14 +228,24 @@ async def quiz_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         logging.error(f"Error in quiz_button: {e}")
 
 async def ask_question(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Ask the current question and handle the user's response."""
+    """Ask the current question, randomize question and answer order, and handle the user's response."""
     try:
-        quiz_data = load_quiz_data()
+        # Ensure global quiz data is loaded
+        load_global_quiz_data()
+        
         category = quiz_data["categories"][context.user_data['category_index']]
-        questions = category['questions']
         
+        # Shuffle questions on the first access
+        if 'shuffled_questions' not in context.user_data:
+            shuffled_questions = category['questions'][:]
+            random.shuffle(shuffled_questions)
+            context.user_data['shuffled_questions'] = shuffled_questions
+            context.user_data['current_question_index'] = 0
+            context.user_data['score'] = 0  # Initialize score
+        
+        questions = context.user_data['shuffled_questions']
         current_index = context.user_data['current_question_index']
-        
+
         # Check if we've run out of questions
         if current_index >= len(questions):
             await end_quiz(update, context)
@@ -227,16 +253,49 @@ async def ask_question(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         question = questions[current_index]
         options = question.get("options", [])
-        keyboard = [[InlineKeyboardButton(opt, callback_data=f"answer_{i}")] for i, opt in enumerate(options)]
+
+        # Shuffle the order of options and store correct answer index
+        option_indices = list(range(len(options)))
+        random.shuffle(option_indices)
+        shuffled_options = [options[i] for i in option_indices]
+        correct_answer_shuffled_index = option_indices.index(question['correct_answer_index'])
+        context.user_data['correct_answer_shuffled_index'] = correct_answer_shuffled_index  # Track for correctness check
+
+        keyboard = [[InlineKeyboardButton(opt, callback_data=f"answer_{i}")] for i, opt in enumerate(shuffled_options)]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        logging.info(f"Question: {question['question']} with options: {options}")
-        await update.callback_query.message.reply_text(f"Question {current_index + 1}: {question['question']}", reply_markup=reply_markup)
+        logging.info(f"Question: {question['question']} with shuffled options: {shuffled_options}")
+        await update.callback_query.message.reply_text(
+            f"Question {current_index + 1}: {question['question']}",
+            reply_markup=reply_markup
+        )
         context.user_data['start_time'] = datetime.now().isoformat()
+    
     except Exception as e:
         await update.callback_query.message.reply_text("There was an issue loading the question. Please contact support.")
         logging.error(f"Error in ask_question: {e}")
 
+async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles the answer selection and updates the score."""
+    try:
+        query = update.callback_query
+        await query.answer()
+        
+        # Retrieve the correct shuffled index for the answer
+        selected_answer_index = int(query.data.split("_")[-1])
+        correct_answer_shuffled_index = context.user_data['correct_answer_shuffled_index']
+        
+        if selected_answer_index == correct_answer_shuffled_index:
+            context.user_data['score'] += 1
+        
+        # Move to the next question
+        context.user_data['current_question_index'] += 1
+        await ask_question(update, context)
+
+    except Exception as e:
+        await update.callback_query.message.reply_text("There was an issue handling your answer. Please contact support.")
+        logging.error(f"Error in handle_answer: {e}")
+        
 async def end_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """End the quiz, show the user's final score, and provide options to play again or end the session."""
     try:
@@ -253,34 +312,6 @@ async def end_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.callback_query.message.reply_text("There was an issue ending the quiz. Please contact support.")
         logging.error(f"Error in end_quiz: {e}")
 
-async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles the answer selection and updates the score."""
-    try:
-        query = update.callback_query
-        await query.answer()
-        
-        # Get the question and answer indices
-        category_index = context.user_data['category_index']
-        quiz_data = load_quiz_data()
-        category = quiz_data["categories"][category_index]
-        questions = category['questions']
-        current_index = context.user_data['current_question_index']
-        
-        # Check if the answer is correct
-        question = questions[current_index]
-        selected_answer_index = int(query.data.split("_")[-1])
-        correct_answer_index = question['correct_answer_index']
-        
-        if selected_answer_index == correct_answer_index:
-            context.user_data['score'] += 1
-        
-        # Move to the next question
-        context.user_data['current_question_index'] += 1
-        await ask_question(update, context)
-
-    except Exception as e:
-        await update.callback_query.message.reply_text("There was an issue handling your answer. Please contact support.")
-        logging.error(f"Error in handle_answer: {e}")
 async def handle_end_game_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles the end game action based on user choice."""
     try:
