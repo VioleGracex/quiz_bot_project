@@ -1,13 +1,12 @@
-from datetime import datetime
 import logging
 import random
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
-from email.mime import application
+from datetime import datetime
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, Poll
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, PollAnswerHandler, ContextTypes
 from handlers.json_functions import load_quiz_data
-from handlers.quiz_keyboards import show_other_categories_keyboard, show_start_game_keyboard, show_end_game_keyboard
+from handlers.quiz_keyboards import show_other_categories_keyboard, show_start_game_keyboard
 from config import quiz_data
-from utils.db_utils import QuizSession, save_session_to_user
+from utils.db_utils import QuizSession, save_session_to_user, get_user_chat_id
 
 # Инициализация глобальной переменной для хранения данных викторины
 if quiz_data is None:
@@ -100,34 +99,109 @@ async def ask_question(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         correct_answer_shuffled_index = option_indices.index(question['correct_answer_index'])
         context.user_data['correct_answer_shuffled_index'] = correct_answer_shuffled_index  # Отслеживание для проверки правильности
 
-        keyboard = [[InlineKeyboardButton(opt, callback_data=f"answer_{i}")] for i, opt in enumerate(shuffled_options)]
-        # Добавить кнопку отмены
-        keyboard.append([InlineKeyboardButton("❌Отмена❌", callback_data="cancel")])
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
         logging.info(f"Вопрос: {question['question']} с перемешанными опциями: {shuffled_options}")
-        await update.callback_query.message.reply_text(
-            f"Вопрос {current_index + 1}: {question['question']}",
-            reply_markup=reply_markup
-        )
-        context.user_data['start_time'] = datetime.now().isoformat()
+
+        user_id = update.effective_user.id
+        chat_id = get_user_chat_id(user_id)
+        if chat_id:
+            # Создать опрос в режиме викторины
+            message = await context.bot.send_poll(
+                chat_id=chat_id,
+                question=f"Вопрос {current_index + 1}: {question['question']}",
+                options=shuffled_options,
+                type=Poll.QUIZ,
+                correct_option_id=correct_answer_shuffled_index,
+                is_anonymous=False,
+            )
+            
+            # Сохранить идентификаторы опроса и сообщения
+            context.user_data['poll_message_id'] = message.message_id
+            context.user_data['poll_id'] = message.poll.id
+            context.user_data['start_time'] = datetime.now().isoformat()
+        else:
+            logging.error("chat_id is None. Cannot send poll.")
     
     except Exception as e:
-        await update.callback_query.message.reply_text("Произошла ошибка при загрузке вопроса. Пожалуйста, свяжитесь с поддержкой.")
+        user_id = update.effective_user.id
+        chat_id = get_user_chat_id(user_id)
+        if chat_id:
+            await context.bot.send_message(chat_id=chat_id, text="Произошла ошибка при загрузке вопроса. Пожалуйста, свяжитесь с поддержкой.")
         logging.error(f"Ошибка в ask_question: {e}")
 
-async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обрабатывает выбор ответа и обновляет счет."""
+async def end_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Завершить викторину, показать итоговый балл пользователя, сохранить сеанс и предоставить опции для повторной игры или завершения сеанса."""
     try:
-        query = update.callback_query
-        await query.answer()
+        score = context.user_data.get('score', 0)
+        category_index = context.user_data.get('category_index')
         
-        # Получить правильный перемешанный индекс для ответа
-        selected_answer_index = int(query.data.split("_")[-1])
+        if category_index is not None:
+            total_questions = len(quiz_data['categories'][category_index]['questions'])
+        else:
+            total_questions = 0
+
+        chat_id = get_user_chat_id(update.effective_user.id)
+
+        # Сохранить данные сеанса
+        quiz_name = context.user_data.get('quiz_name', str(category_index))
+        start_time = context.user_data.get('start_time')
+        if start_time:
+            start_time = datetime.fromisoformat(start_time)
+        else:
+            start_time = datetime.now()
+        
+        end_time = datetime.now()
+        duration = (end_time - start_time).total_seconds() / 60
+        current_question_index = context.user_data.get('current_question_index', 0)
+
+        if chat_id:
+            # Создать и сохранить сеанс QuizSession
+            quiz_session_to_save = QuizSession(chat_id, quiz_name, start_time, end_time, score, duration, current_question_index)
+            save_session_to_user(quiz_session_to_save)
+
+            # Показать итоговый балл
+            await context.bot.send_message(chat_id=chat_id, text=f"Викторина завершена! Ваш счет: {score}/{total_questions}")
+
+            # Показать опции завершения игры (например, повторная игра или завершение сеанса)
+            await show_end_game_keyboard(chat_id, context)
+        else:
+            logging.error("chat_id is None. Cannot send message.")
+    except Exception as e:
+        logging.error(f"Ошибка в end_quiz: {e}")
+        chat_id = update.effective_chat.id if update.effective_chat else None
+        if chat_id:
+            await context.bot.send_message(chat_id=chat_id, text="Произошла ошибка при завершении викторины. Пожалуйста, свяжитесь с поддержкой.")
+
+async def show_end_game_keyboard(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показать опции завершения игры: играть снова или выбрать другую викторину."""
+    try:
+        keyboard = [
+            [
+                InlineKeyboardButton("Играть снова", callback_data="play_again"),
+                InlineKeyboardButton("Выбрать другую викторину", callback_data="choose_another_quiz"),
+                InlineKeyboardButton("Завершить сеанс", callback_data="end_session"),
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await context.bot.send_message(chat_id=chat_id, text="Викторина завершена! Что вы хотите сделать дальше?", reply_markup=reply_markup)
+    except Exception as e:
+        logging.error(f"Ошибка в show_end_game_keyboard: {e}")
+        await context.bot.send_message(chat_id=chat_id, text="Произошла ошибка при показе опций завершения игры. Пожалуйста, свяжитесь с поддержкой.")
+
+async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обрабатывает ответ на опрос и обновляет счет."""
+    try:
+        answer = update.poll_answer
+        poll_id = answer.poll_id
+        user = answer.user
+
+        # Проверить, является ли это ответом на текущий опрос
+        if poll_id != context.user_data.get('poll_id'):
+            return
+        
         correct_answer_shuffled_index = context.user_data['correct_answer_shuffled_index']
         
         # Предоставить обратную связь по выбранному ответу
-        if selected_answer_index == correct_answer_shuffled_index:
+        if answer.option_ids[0] == correct_answer_shuffled_index:
             context.user_data['score'] += 1
             feedback = "✅ Правильно!"
         else:
@@ -135,56 +209,37 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             feedback = f"❌ Неправильно! Правильный ответ: {correct_option}"
 
         # Удалить старое сообщение с вопросом
-        await query.message.delete()
+        poll_message_id = context.user_data.get('poll_message_id')
+        chat_id = user.id
+        if poll_message_id and chat_id:
+            await context.bot.delete_message(chat_id=chat_id, message_id=poll_message_id)
 
         # Перейти к следующему вопросу
         context.user_data['current_question_index'] += 1
 
         # Показать обратную связь и следующий вопрос
-        await query.message.reply_text(feedback)
-        await ask_question(update, context)
-
+        if chat_id:
+            await context.bot.send_message(chat_id=chat_id, text=feedback)
+            await ask_question(update, context)
+      
     except Exception as e:
-        await update.callback_query.message.reply_text("Произошла ошибка при обработке вашего ответа. Пожалуйста, свяжитесь с поддержкой.")
-        logging.error(f"Ошибка в handle_answer: {e}")
+        logging.error(f"Ошибка в handle_poll_answer: {e}")
+        user_id = update.effective_user.id
+        chat_id = get_user_chat_id(user_id)
+        if chat_id:
+            await context.bot.send_message(chat_id=chat_id, text="Произошла ошибка при обработке вашего ответа. Пожалуйста, свяжитесь с поддержкой.")
 
 async def handle_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработка нажатия кнопки отмены."""
     query = update.callback_query
     await query.answer()
 
-    # Очистить данные викторины из контекста пользователя
+    # Очистить данные викторины из контекста пользователя, кроме start_time
+    start_time = context.user_data.get('start_time')
     context.user_data.clear()
-    
+    context.user_data['start_time'] = start_time
+
     await query.message.reply_text("Сеанс викторины отменен.")
-
-async def end_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Завершить викторину, показать итоговый балл пользователя, сохранить сеанс и предоставить опции для повторной игры или завершения сеанса."""
-    try:
-        score = context.user_data['score']
-        total_questions = len(quiz_data['categories'][context.user_data['category_index']]['questions'])
-
-        # Сохранить данные сеанса
-        chat_id = update.effective_chat.id
-        quiz_name = context.user_data.get('quiz_name', context.user_data.get('category_index'))
-        start_time = datetime.fromisoformat(context.user_data.get('start_time'))
-        end_time = datetime.now()
-        duration = (end_time - start_time).total_seconds() / 60
-        current_question_index = context.user_data.get('current_question_index', 0)
-
-        # Создать и сохранить сеанс QuizSession
-        quiz_session_to_save = QuizSession(chat_id, quiz_name, start_time, end_time, score, duration, current_question_index)
-        save_session_to_user(quiz_session_to_save)
-
-        # Показать итоговый балл
-        await update.callback_query.message.reply_text(f"Викторина завершена! Ваш счет: {score}/{total_questions}")
-
-        # Показать опции завершения игры (например, повторная игра или завершение сеанса)
-        await show_end_game_keyboard(update, context)
-
-    except Exception as e:
-        await update.callback_query.message.reply_text("Произошла ошибка при завершении викторины. Пожалуйста, свяжитесь с поддержкой.")
-        logging.error(f"Ошибка в end_quiz: {e}")
 
 async def handle_quiz_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработка выбора категории викторины."""
@@ -210,7 +265,10 @@ async def handle_play_again(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await query.answer()
 
     try:
-        # Сброс данных пользователя для сеанса викторины
+        # Сброс данных пользователя для сеанса викторины, кроме start_time
+        start_time = context.user_data.get('start_time')
+        #context.user_data.clear() # delete only what you need to delete there is category saved for play again
+        context.user_data['start_time'] = start_time
         context.user_data['current_question_index'] = 0
         context.user_data['score'] = 0
         context.user_data['quiz_in_progress'] = True
@@ -227,8 +285,10 @@ async def handle_choose_another_quiz(update: Update, context: ContextTypes.DEFAU
     await query.answer()
 
     try:
-        # Очистить предыдущие данные викторины
+        # Очистить предыдущие данные викторины, кроме start_time
+        start_time = context.user_data.get('start_time')
         context.user_data.clear()
+        context.user_data['start_time'] = start_time
         
         # Показать опции начала игры для выбора новой категории викторины
         await show_other_categories_keyboard(update, context)
@@ -255,18 +315,20 @@ async def quiz_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def end_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработка команды /end для завершения сеанса."""
-    # Очистить данные викторины из контекста пользователя
+    # Очистить данные викторины из контекста пользователя, кроме start_time
+    start_time = context.user_data.get('start_time')
     context.user_data.clear()
+    context.user_data['start_time'] = start_time
     await update.message.reply_text("Сеанс викторины завершен.")
 
-def setup_session_handlers(application: application) -> None:
+def setup_session_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("quiz_start", quiz_start))
     application.add_handler(CommandHandler("continue", continue_quiz))
     application.add_handler(CommandHandler("end", end_session))  # Обработчик для команды /end
     application.add_handler(CommandHandler("cancel", end_session))  # Обработчик для команды /cancel
     application.add_handler(CallbackQueryHandler(handle_quiz_selection, pattern="^choose_category_\\d+$"))
     application.add_handler(CallbackQueryHandler(ask_question, pattern="^play_quiz$"))
-    application.add_handler(CallbackQueryHandler(handle_answer, pattern="^answer_\\d+$"))
+    application.add_handler(PollAnswerHandler(handle_poll_answer))
     application.add_handler(CallbackQueryHandler(handle_cancel, pattern="^cancel$"))
     application.add_handler(CallbackQueryHandler(handle_play_again, pattern="^play_again$"))
     application.add_handler(CallbackQueryHandler(handle_choose_another_quiz, pattern="^choose_another_quiz"))

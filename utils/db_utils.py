@@ -62,6 +62,20 @@ def add_user_to_db(user):
     connection.commit()
     connection.close()
 
+def get_user_chat_id(chat_id):
+    """Retrieve the chat_id for a given user_id from the database."""
+    connection = sqlite3.connect(DB_PATH)
+    cursor = connection.cursor()
+
+    cursor.execute("SELECT chat_id FROM users WHERE chat_id = ?", (chat_id,))
+    result = cursor.fetchone()
+
+    connection.close()
+
+    if result:
+        return result[0]
+    else:
+        return None
 def get_user_by_chat_id(chat_id: int) -> Optional['User']:
     connection = sqlite3.connect(DB_PATH)
     cursor = connection.cursor()
@@ -249,3 +263,4 @@ class User:
         active_session = self.get_active_session()
         if active_session:
             active_session.update_current_question_index(new_index)
+            
