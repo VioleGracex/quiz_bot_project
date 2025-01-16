@@ -1,122 +1,133 @@
 from email.mime import application
+import re
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 
-from handlers.quiz_session_handler import show_start_game_keyboard
 
+from handlers.quiz_keyboards import show_start_game_keyboard
 from utils.db_utils import User, add_user_to_db, is_user_in_db
 
-
-# Privacy agreement link (can be replaced with actual URL)
+# Ссылка на соглашение о конфиденциальности (можно заменить на фактический URL)
 PRIVACY_AGREEMENT_LINK = "https://example.com/privacy"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Ask the user for privacy agreement or welcome back if they are in the database."""
-    chat_id = update.message.chat.id  # Use chat_id instead of user_id
-    print(f"Start function: Checking if user {chat_id} exists in the database.")
+    """Спросите пользователя о соглашении о конфиденциальности или поприветствуйте его, если он уже в базе данных."""
+    chat_id = update.message.chat.id  # Используйте chat_id вместо user_id
+    print(f"Функция start: Проверка, существует ли пользователь {chat_id} в базе данных.")
     
-    # Check if the user exists in the database
+    # Проверьте, существует ли пользователь в базе данных
     if is_user_in_db(chat_id):
-        # If the user exists, welcome back and show the start game keyboard
-        await update.message.reply_text("Welcome back! Let's start the game!")
+        # Если пользователь существует, поприветствуйте его и покажите клавиатуру начала игры
+        await update.message.reply_text("С возвращением! Давайте начнем игру!")
         await show_start_game_keyboard(update, context)
-        return  # Exit the function early to skip the privacy agreement process
+        return  # Выйти из функции, чтобы пропустить процесс соглашения о конфиденциальности
     
-    # If the user does not exist, ask for the privacy agreement
+    # Если пользователь не существует, спросите о соглашении о конфиденциальности
     keyboard = [
         [
-            InlineKeyboardButton("Yes, I agree", callback_data="accept"),
-            InlineKeyboardButton("No, I decline", callback_data="decline"),
+            InlineKeyboardButton("Да, я согласен", callback_data="accept"),
+            InlineKeyboardButton("Нет, я не согласен", callback_data="decline"),
         ],
-        [InlineKeyboardButton("End Session", callback_data="end_session")],
+        [InlineKeyboardButton("Завершить сеанс", callback_data="end_session")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text(
-        f"Welcome! Please review our Privacy Policy and Data Sharing Terms before proceeding: {PRIVACY_AGREEMENT_LINK}\nDo you agree to the terms?",
+        f"Добро пожаловать! Пожалуйста, ознакомьтесь с нашей Политикой конфиденциальности и Условиями обмена данными перед продолжением: {PRIVACY_AGREEMENT_LINK}\nВы согласны с условиями?",
         reply_markup=reply_markup,
     )
-    context.user_data['awaiting_privacy_confirmation'] = True  # Indicate that we are waiting for the privacy agreement
+    context.user_data['awaiting_privacy_confirmation'] = True  # Указать, что мы ждем подтверждения конфиденциальности
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles the privacy agreement response or session termination."""
+    """Обрабатывает ответ на соглашение о конфиденциальности или завершение сеанса."""
     query = update.callback_query
     await query.answer()
 
     if query.data == "accept":
-        # Privacy accepted, proceed to ask for user info
-        await query.edit_message_text("Thank you for accepting! Please provide your Name:")
+        # Соглашение о конфиденциальности принято, перейти к запросу информации о пользователе
+        await query.edit_message_text("Спасибо за принятие! Пожалуйста, укажите свое Имя:")
         context.user_data['privacy_accepted'] = True
         context.user_data['awaiting_name'] = True
 
     elif query.data == "decline":
-        # Privacy declined, end the session
-        await query.edit_message_text("You must agree to the terms to proceed. Session will end.")
-        await query.message.reply_text("Goodbye!")
-        context.user_data.clear()  # Clear user data
-        return  # End the process
+        # Соглашение о конфиденциальности отклонено, завершить сеанс
+        await query.edit_message_text("Вы должны согласиться с условиями, чтобы продолжить. Сеанс будет завершен.")
+        await query.message.reply_text("До свидания!")
+        context.user_data.clear()  # Очистить данные пользователя
+        return  # Завершить процесс
 
     elif query.data == "end_session":
-        # End session, cancel the connection
-        await query.edit_message_text("Session ended. Goodbye!")
-        context.user_data.clear()  # Clear user data
+        # Завершить сеанс, отменить соединение
+        await query.edit_message_text("Сеанс завершен. До свидания!")
+        context.user_data.clear()  # Очистить данные пользователя
         return
 
-
 async def collect_user_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Collects user information after accepting privacy terms."""
+    """Сбор информации о пользователе после принятия условий конфиденциальности."""
     user_info = update.message.text.strip()
 
     if context.user_data.get('awaiting_name', False):
-        context.user_data['name'] = user_info
-        await update.message.reply_text("Great! Now, please provide your Job:")
-        context.user_data['awaiting_name'] = False
-        context.user_data['awaiting_job'] = True
+        if re.match(r'^[А-Яа-яA-Za-z\s]+$', user_info):
+            context.user_data['name'] = user_info
+            await update.message.reply_text("Отлично! Теперь, пожалуйста, укажите вашу Профессию:")
+            context.user_data['awaiting_name'] = False
+            context.user_data['awaiting_job'] = True
+        else:
+            await update.message.reply_text("Пожалуйста, укажите корректное имя.")
 
     elif context.user_data.get('awaiting_job', False):
-        context.user_data['job'] = user_info
-        await update.message.reply_text("Thank you! Now, please provide your Phone Number:")
-        context.user_data['awaiting_job'] = False
-        context.user_data['awaiting_phone_number'] = True
+        if re.match(r'^[А-Яа-яA-Za-z\s]+$', user_info):
+            context.user_data['job'] = user_info
+            await update.message.reply_text("Спасибо! Теперь, пожалуйста, укажите ваш Номер телефона:")
+            context.user_data['awaiting_job'] = False
+            context.user_data['awaiting_phone_number'] = True
+        else:
+            await update.message.reply_text("Пожалуйста, укажите корректную профессию.")
 
     elif context.user_data.get('awaiting_phone_number', False):
-        context.user_data['phone_number'] = user_info
-        await update.message.reply_text("Thank you! Finally, please provide your Email:")
-        context.user_data['awaiting_phone_number'] = False
-        context.user_data['awaiting_email'] = True
+        if re.match(r'^\+?\d{10,15}$', user_info):
+            context.user_data['phone_number'] = user_info
+            await update.message.reply_text("Спасибо! Наконец, пожалуйста, укажите ваш Email:")
+            context.user_data['awaiting_phone_number'] = False
+            context.user_data['awaiting_email'] = True
+        else:
+            await update.message.reply_text("Пожалуйста, укажите корректный номер телефона.")
 
     elif context.user_data.get('awaiting_email', False):
-        context.user_data['email'] = user_info
-        # Finalize registration
-        await update.message.reply_text(f"Thank you for providing all information. Registration complete!")
+        if re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', user_info):
+            context.user_data['email'] = user_info
+            # Завершить регистрацию
+            await update.message.reply_text("Спасибо за предоставленную информацию. Регистрация завершена!")
 
-        # Create a User object to store in the database
-        user = User(
-            chat_id=update.message.chat.id,  # Use the chat_id as unique identifier
-            name=context.user_data['name'],
-            job=context.user_data['job'],
-            phone_number=context.user_data['phone_number'],
-            email=context.user_data['email'],
-            privacy_accepted=1  # Set privacy accepted to 1
-        )
+            # Создать объект User для сохранения в базе данных
+            user = User(
+                chat_id=update.message.chat.id,  # Используйте chat_id в качестве уникального идентификатора
+                name=context.user_data['name'],
+                job=context.user_data['job'],
+                phone_number=context.user_data['phone_number'],
+                email=context.user_data['email'],
+                privacy_accepted=1  # Принятие конфиденциальности установлено в 1
+            )
 
-        # Save the user data to the database
-        add_user_to_db(user)
+            # Сохранить данные пользователя в базе данных
+            add_user_to_db(user)
 
-        # Clean up user data from context
-        del context.user_data['awaiting_email']
-        del context.user_data['name']
-        del context.user_data['job']
-        del context.user_data['phone_number']
-        del context.user_data['email']
-        del context.user_data['privacy_accepted'] 
+            # Очистить данные пользователя из контекста
+            del context.user_data['awaiting_email']
+            del context.user_data['name']
+            del context.user_data['job']
+            del context.user_data['phone_number']
+            del context.user_data['email']
+            del context.user_data['privacy_accepted'] 
 
-        # Show the start game keyboard
-        await show_start_game_keyboard(update, context)
+            # Показать клавиатуру начала игры
+            await show_start_game_keyboard(update, context)
+        else:
+            await update.message.reply_text("Пожалуйста, укажите корректный email.")
 
 def setup_start_handlers(application: application) -> None:
-    """Sets up all the handlers for the bot."""
-    # Handlers
+    """Настраивает все обработчики для бота."""
+    # Обработчики
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button, pattern="^(accept|decline|end_session)$"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, collect_user_info))
