@@ -1,8 +1,8 @@
-import logging
 import os
 import sqlite3
-from models.user_model import User
-from typing import Optional
+import uuid
+from datetime import datetime
+from typing import List, Optional
 
 # Directory setup for database storage
 DB_DIRECTORY = "data"
@@ -33,7 +33,7 @@ def init_db():
     # Create sessions table with session ID and foreign key reference to users table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS sessions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT PRIMARY KEY,
             chat_id INTEGER,
             quiz_name TEXT,
             start_time TEXT,
@@ -41,7 +41,6 @@ def init_db():
             score INTEGER,
             duration REAL,
             current_question_index INTEGER,
-            highest_score INTEGER,
             FOREIGN KEY (chat_id) REFERENCES users (chat_id)
         )
     ''')
@@ -49,8 +48,11 @@ def init_db():
     connection.commit()
     connection.close()
 
+# Initialize the database
+init_db()
+
 # Database functions
-def add_user_to_db(user: User):
+def add_user_to_db(user):
     connection = sqlite3.connect(DB_PATH)
     cursor = connection.cursor()
     cursor.execute(
@@ -60,14 +62,16 @@ def add_user_to_db(user: User):
     connection.commit()
     connection.close()
 
-def get_user_by_chat_id(chat_id: int):
+def get_user_by_chat_id(chat_id: int) -> Optional['User']:
     connection = sqlite3.connect(DB_PATH)
     cursor = connection.cursor()
     cursor.execute("SELECT * FROM users WHERE chat_id = ?", (chat_id,))
     result = cursor.fetchone()
     connection.close()
     if result:
-        return User(*result)
+        user = User(*result)
+        user.quiz_sessions = get_sessions_by_user(chat_id)
+        return user
     return None
 
 def is_user_in_db(chat_id: int) -> bool:
@@ -86,56 +90,46 @@ def delete_user_from_db(chat_id: int):
     connection = sqlite3.connect(DB_PATH)
     cursor = connection.cursor()
     cursor.execute("DELETE FROM users WHERE chat_id = ?", (chat_id,))
+    cursor.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))
     connection.commit()
     connection.close()
 
-def save_session(chat_id, quiz_name, start_time, end_time, score, duration, current_question_index):
-    logging.debug(f"Saving session: chat_id={chat_id}, quiz_name={quiz_name}, start_time={start_time}, end_time={end_time}, score={score}, duration={duration}, current_question_index={current_question_index}")
+def save_session_to_user(session: 'QuizSession'):
+    """
+    Saves a quiz session to the database for a specific user.
     
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-
-    # Get the current highest score from the database for this chat_id
-    cursor.execute("SELECT highest_score FROM sessions WHERE chat_id = ? ORDER BY id DESC LIMIT 1", (chat_id,))
-    result = cursor.fetchone()
-
-    highest_score = score
-    if result:
-        # If a session exists, compare and update the highest score if necessary
-        highest_score = max(result[0], score)
-
-    # Insert a new session ensuring it's unique (id will auto-increment)
-    cursor.execute(""" 
-    INSERT INTO sessions (chat_id, quiz_name, start_time, end_time, score, duration, current_question_index, highest_score)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (chat_id, quiz_name, start_time, end_time, score, duration, current_question_index, highest_score))
-
-    conn.commit()
-    conn.close()
-
-
-
-def get_session_by_id(session_id):
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    :param session: The QuizSession object containing session details.
+    """
+    connection = sqlite3.connect(DB_PATH)
+    cursor = connection.cursor()
     
-    cursor.execute("SELECT * FROM sessions WHERE id = ?", (session_id,))
-    session = cursor.fetchone()
+    cursor.execute(
+        '''
+        INSERT OR REPLACE INTO sessions (
+            session_id, chat_id, quiz_name, start_time, end_time, score, duration, current_question_index
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', 
+        (
+            session.session_id, session.chat_id, session.quiz_name, session.start_time.strftime("%Y-%m-%d %H:%M:%S"),
+            session.end_time.strftime("%Y-%m-%d %H:%M:%S") if session.end_time else None,
+            session.score, session.duration, session.current_question_index
+        )
+    )
     
-    conn.close()
-    return session
+    connection.commit()
+    connection.close()
 
-def get_sessions_by_user(chat_id):
+def get_sessions_by_user(chat_id: int) -> List['QuizSession']:
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    cursor.execute("SELECT * FROM sessions WHERE chat_id = ? ORDER BY id DESC", (chat_id,))
+    cursor.execute("SELECT * FROM sessions WHERE chat_id = ? ORDER BY start_time DESC", (chat_id,))
     sessions = cursor.fetchall()
     
     conn.close()
-    return sessions
+    return [QuizSession.from_db_row(row) for row in sessions]
 
-def get_user_session_count(chat_id):
+def get_user_session_count(chat_id: int) -> int:
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
@@ -145,7 +139,7 @@ def get_user_session_count(chat_id):
     conn.close()
     return session_count
 
-def get_global_score():
+def get_global_score() -> int:
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
@@ -155,23 +149,105 @@ def get_global_score():
     conn.close()
     return global_score if global_score is not None else 0  # Return 0 if there are no sessions
 
-def get_highest_score(chat_id):
+def get_highest_score(chat_id: int) -> int:
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    cursor.execute("SELECT highest_score FROM sessions WHERE chat_id = ? ORDER BY id DESC LIMIT 1", (chat_id,))
+    cursor.execute("SELECT MAX(score) FROM sessions WHERE chat_id = ?", (chat_id,))
     highest_score = cursor.fetchone()[0]
     
     conn.close()
     return highest_score
 
-def get_current_question_index(chat_id):
+def get_current_question_index(chat_id: int) -> int:
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    cursor.execute("SELECT current_question_index FROM sessions WHERE chat_id = ? ORDER BY id DESC LIMIT 1", (chat_id,))
+    cursor.execute("SELECT current_question_index FROM sessions WHERE chat_id = ? ORDER BY start_time DESC LIMIT 1", (chat_id,))
     current_question_index = cursor.fetchone()
     current_question_index = current_question_index[0] if current_question_index else 0
     
     conn.close()
     return current_question_index
+
+class QuizSession:
+    def __init__(self, chat_id, quiz_name):
+        self.session_id = str(uuid.uuid4())  # Generate a unique session ID
+        self.chat_id = chat_id
+        self.quiz_name = quiz_name
+        self.start_time = datetime.now()
+        self.end_time = None
+        self.score = 0
+        self.duration = None
+        self.current_question_index = 0
+
+        # Initialize the session in the database
+        init_db()
+        self.save_to_db()
+
+    def save_to_db(self):
+        # Save the session data to the database
+        save_session_to_user(self)
+
+    def end_session(self):
+        self.end_time = datetime.now()
+        self.duration = (self.end_time - self.start_time).total_seconds()
+        self.save_to_db()  # Update session in the database with the end time and duration
+
+    def update_score(self, new_score):
+        self.score = new_score
+        self.save_to_db()
+
+    def update_current_question_index(self, new_index):
+        self.current_question_index = new_index
+        self.save_to_db()
+
+    @classmethod
+    def from_db_row(cls, row):
+        session = cls(row[1], row[2])
+        session.session_id = row[0]
+        session.start_time = datetime.strptime(row[3], "%Y-%m-%d %H:%M:%S")
+        session.end_time = datetime.strptime(row[4], "%Y-%m-%d %H:%M:%S") if row[4] else None
+        session.score = row[5]
+        session.duration = row[6]
+        session.current_question_index = row[7]
+        return session
+
+class User:
+    def __init__(self, chat_id: int, name: str, job: str, phone_number: str, email: str, privacy_accepted: int):
+        self.chat_id = chat_id
+        self.name = name
+        self.job = job
+        self.phone_number = phone_number
+        self.email = email
+        self.privacy_accepted = bool(privacy_accepted)  # Convert to boolean
+        self.quiz_sessions = []  # Initialize an empty list of quiz sessions
+
+    def is_privacy_accepted(self):
+        return self.privacy_accepted
+
+    def start_quiz_session(self, quiz_name):
+        new_session = QuizSession(self.chat_id, quiz_name)
+        self.quiz_sessions.append(new_session)
+        return new_session
+
+    def get_active_session(self):
+        for session in self.quiz_sessions:
+            if session.end_time is None:
+                return session
+        return None
+
+    def end_active_session(self):
+        active_session = self.get_active_session()
+        if active_session:
+            active_session.end_session()
+
+    def update_active_session_score(self, new_score):
+        active_session = self.get_active_session()
+        if active_session:
+            active_session.update_score(new_score)
+
+    def update_active_session_question_index(self, new_index):
+        active_session = self.get_active_session()
+        if active_session:
+            active_session.update_current_question_index(new_index)

@@ -3,8 +3,8 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 
 from handlers.quiz_session_handler import show_start_game_keyboard
-from models.user_model import User
-from utils.db_utils import add_user_to_db, is_user_in_db
+
+from utils.db_utils import User, add_user_to_db, is_user_in_db
 
 
 # Privacy agreement link (can be replaced with actual URL)
@@ -109,17 +109,10 @@ async def collect_user_info(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         del context.user_data['job']
         del context.user_data['phone_number']
         del context.user_data['email']
+        del context.user_data['privacy_accepted'] 
 
         # Show the start game keyboard
         await show_start_game_keyboard(update, context)
-
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Cancel the registration and clear user data."""
-    if update.message.text.strip().lower() == "cancel":
-        await update.message.reply_text("Registration process cancelled.")
-        context.user_data.clear()
-
 
 def setup_start_handlers(application: application) -> None:
     """Sets up all the handlers for the bot."""
@@ -127,4 +120,3 @@ def setup_start_handlers(application: application) -> None:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button, pattern="^(accept|decline|end_session)$"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, collect_user_info))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, cancel))  
