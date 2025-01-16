@@ -171,18 +171,16 @@ def get_current_question_index(chat_id: int) -> int:
     return current_question_index
 
 class QuizSession:
-    def __init__(self, chat_id, quiz_name):
+    def __init__(self, chat_id, quiz_name, start_time=None, end_time=None, score=0, duration=None, current_question_index=0):
         self.session_id = str(uuid.uuid4())  # Generate a unique session ID
         self.chat_id = chat_id
         self.quiz_name = quiz_name
-        self.start_time = datetime.now()
-        self.end_time = None
-        self.score = 0
-        self.duration = None
-        self.current_question_index = 0
+        self.start_time = start_time if start_time else datetime.now()
+        self.end_time = end_time
+        self.score = score
+        self.duration = duration
+        self.current_question_index = current_question_index
 
-        # Initialize the session in the database
-        init_db()
         self.save_to_db()
 
     def save_to_db(self):

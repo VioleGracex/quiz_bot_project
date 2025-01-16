@@ -2,11 +2,11 @@ import json
 import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
-from handlers.json_functions import load_quiz_data
 from handlers.start_handler import setup_start_handlers
 from handlers.quiz_session_handler import setup_session_handlers
-from utils.db_utils import init_db
 from config import quiz_data
+from utils.db_utils import init_db
+
 
 # Enable logging
 logging.basicConfig(
@@ -32,6 +32,8 @@ async def help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 def main() -> None:
     # Initialize the databases
     #load_quiz_data()
+    # Initialize the session in the database
+    # init_db()
     if quiz_data:
         print("Quiz data loaded successfully.")
     else:

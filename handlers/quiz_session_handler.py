@@ -4,11 +4,11 @@ import random
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 from email.mime import application
-from telegram.ext import   ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
+from telegram.ext import   ContextTypes, CommandHandler, CallbackQueryHandler, filters
 from handlers.json_functions import load_quiz_data
 from handlers.quiz_keyboards import show_other_categories_keyboard, show_start_game_keyboard, show_end_game_keyboard
-from handlers.quiz_session_handler_stable import load_global_quiz_data
 from config import quiz_data
+from utils.db_utils import QuizSession, save_session_to_user
 
 
 
@@ -160,7 +160,6 @@ async def handle_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     context.user_data.clear()
     
     await query.message.reply_text("Quiz session cancelled.")
-
 async def end_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """End the quiz, show the user's final score, save the session, and provide options to play again or end the session."""
     try:
@@ -170,13 +169,14 @@ async def end_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         # Save the session data
         chat_id = update.effective_chat.id
         quiz_name = context.user_data.get('quiz_name', context.user_data.get('category_index'))
-        start_time = context.user_data.get('start_time')
-        end_time = datetime.now().isoformat()
-        duration = (datetime.fromisoformat(end_time) - datetime.fromisoformat(start_time)).total_seconds() / 60
+        start_time = datetime.fromisoformat(context.user_data.get('start_time'))
+        end_time = datetime.now()
+        duration = (end_time - start_time).total_seconds() / 60
         current_question_index = context.user_data.get('current_question_index', 0)
 
-        # Save the session to the database (implement save_session_to_user based on your DB setup)
-        # save_session_to_user(chat_id, quiz_name, start_time, end_time, score, duration, current_question_index)
+        # Create and save the QuizSession
+        quiz_session_to_save = QuizSession(chat_id, quiz_name, start_time, end_time, score, duration, current_question_index)
+        save_session_to_user(quiz_session_to_save)
 
         # Show the final score
         await update.callback_query.message.reply_text(f"Quiz finished! Your score: {score}/{total_questions}")
@@ -187,7 +187,6 @@ async def end_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception as e:
         await update.callback_query.message.reply_text("There was an issue ending the quiz. Please contact support.")
         logging.error(f"Error in end_quiz: {e}")
-
 async def handle_quiz_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle quiz category selection."""
     query = update.callback_query
