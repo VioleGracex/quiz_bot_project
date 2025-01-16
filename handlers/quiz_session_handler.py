@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import random
 from datetime import datetime
@@ -212,6 +213,7 @@ async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
         poll_message_id = context.user_data.get('poll_message_id')
         chat_id = user.id
         if poll_message_id and chat_id:
+            await asyncio.sleep(1)  # Delay for 2 seconds
             await context.bot.delete_message(chat_id=chat_id, message_id=poll_message_id)
 
         # Перейти к следующему вопросу
